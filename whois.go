@@ -6,9 +6,10 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 )
 
-func whoIs(domain string) {
+func whoIs(domain string) ([]string, error) {
 	api := "73095bdaadefb536293530d4fa553408e0a5ee7c82edcc606da2d0f20f93f2b8"
 
 	url := fmt.Sprintf("https://whoisjson.com/api/v1/whois?domain=%s", domain)
@@ -23,29 +24,59 @@ func whoIs(domain string) {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Fatalf("Failed to make request: %v", err)
+		return nil, fmt.Errorf("failed to make request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Fatalf("Failed to read response: %v", err)
+		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		log.Fatalf("Request failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var result map[string]interface{}
 	if err := json.Unmarshal(body, &result); err != nil {
-		log.Fatalf("Failed to parse JSON: %v", err)
+		return nil, fmt.Errorf("failed to parse JSON: %w", err)
 	}
 
 	// Pretty print the JSON
-	pretty, err := json.MarshalIndent(result, "", "  ")
+	filtered := filterWhois(result)
+
+	pretty, err := json.MarshalIndent(filtered, "", "  ")
 	if err != nil {
-		log.Fatalf("Failed to format JSON: %v", err)
+		return nil, fmt.Errorf("failed to format JSON: %w", err)
 	}
 
-	fmt.Printf("Whois JSON Response for %s:\n%s\n", domain, string(pretty))
+	lines := strings.Split(string(pretty), "\n")
+	return lines, nil
+}
+
+func filterWhois(data map[string]interface{}) map[string]interface{} {
+	cleaned := make(map[string]interface{})
+	for key, value := range data {
+		switch v := value.(type) {
+		case string:
+			if v != "REDACTED FOR PRIVACY" {
+				cleaned[key] = v
+			}
+		case []interface{}:
+			var newArr []interface{}
+			for _, elem := range v {
+				if elemMap, ok := elem.(map[string]interface{}); ok {
+					newArr = append(newArr, filterWhois(elemMap))
+				} else {
+					newArr = append(newArr, elem)
+				}
+			}
+			cleaned[key] = newArr
+		case map[string]interface{}:
+			cleaned[key] = filterWhois(v)
+		default:
+			cleaned[key] = value
+		}
+	}
+	return cleaned
 }

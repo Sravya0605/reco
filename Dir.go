@@ -13,19 +13,12 @@ import (
 	"time"
 )
 
-type Result struct {
-	path       string
-	StatusCode int
-}
-
-func dir(domain string) {
+func dir(domain string) []string {
 	file, err := os.Open("TextFiles/common.txt")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer file.Close()
-
-	var mu sync.Mutex
 
 	var lines []string
 	scanner := bufio.NewScanner(file)
@@ -40,24 +33,25 @@ func dir(domain string) {
 		Timeout: 5 * time.Second,
 	}
 
-	var results []Result
-
+	var results []string
+	var mu sync.Mutex
 	sem := make(chan struct{}, 20)
 	var wg sync.WaitGroup
 
 	for _, line := range lines {
 		wg.Add(1)
 		sem <- struct{}{} // acquire slot
+
 		go func(line string) {
 			defer wg.Done()
 			defer func() { <-sem }() // release slot
 
-			url := fmt.Sprintf("https://%s/%s", domain, line)
-
+			// Skip invalid paths
 			if strings.ContainsAny(line, " @!#$%^&*()[]{};:'\"\\|,<>?") && !strings.HasPrefix(line, ".") {
-				return // skip this line
+				return
 			}
 
+			url := fmt.Sprintf("https://%s/%s", domain, line)
 			req, err := http.NewRequest("GET", url, nil)
 			if err != nil {
 				return
@@ -85,36 +79,17 @@ func dir(domain string) {
 			}
 
 			mu.Lock()
-			results = append(results, Result{
-				path:       line,
-				StatusCode: resp.StatusCode,
-			})
+			results = append(results, fmt.Sprintf("[%d] %s", resp.StatusCode, line))
 			mu.Unlock()
-
 		}(line)
 	}
 
-	wg.Wait() // wait for all goroutines to finish
+	wg.Wait()
+
+	// Sort results alphabetically
 	sort.Slice(results, func(i, j int) bool {
-		return results[i].StatusCode < results[j].StatusCode
+		return results[i] < results[j]
 	})
 
-	for _, r := range results {
-		color := colorForStatus(r.StatusCode)
-		reset := "\033[0m"
-		fmt.Printf("%s[%d]%s %s\n", color, r.StatusCode, reset, r.path)
-	}
-}
-
-func colorForStatus(code int) string {
-	switch {
-	case code >= 200 && code < 300:
-		return "\033[32m" // green
-	case code >= 300 && code < 400:
-		return "\033[36m" // cyan
-	case code >= 400 && code < 500:
-		return "\033[33m" // yellow
-	default:
-		return "\033[31m" // red
-	}
+	return results
 }
