@@ -224,28 +224,3 @@ func slugify(s string) string {
 	}
 	return s
 }
-
-// ----------- Minimal main example for integration -----------
-
-/*
-func main() {
-    domain := "example.com" // Or get from user input
-
-    go func() {
-        result, err := RunNmapScans(domain, false)
-        displayText := ""
-        if err != nil {
-            displayText = "Error: " + err.Error()
-        } else {
-            displayText = result
-        }
-
-        fyne.CurrentApp().Driver().DoFromGoroutine(func() {
-            op.SetText(displayText)
-            op.Show()
-        }, true)
-    }()
-
-    // setup and run your fyne app here...
-}
-*/

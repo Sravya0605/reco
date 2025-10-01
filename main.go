@@ -71,7 +71,7 @@ func main() {
 
 		go func() {
 			var wg sync.WaitGroup
-			results := make(chan string, 4)
+			results := make(chan string, 10) // increase buffer for more tools
 
 			// Run Whois
 			wg.Add(1)
@@ -125,13 +125,77 @@ func main() {
 				}
 			}()
 
+			// Run Email Harvester
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				emails, err := emailHarvester(domain)
+				if err != nil {
+					results <- "Email Harvester error: " + err.Error()
+				} else if len(emails) == 0 {
+					results <- "No emails found."
+				} else {
+					results <- "Email Harvester:\n" + FormatEmailResults(emails)
+				}
+			}()
+
+			// Run SSL Scanner
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				ssl, err := sslScanner(domain)
+				if err != nil {
+					results <- "SSL Scanner error: " + err.Error()
+				} else {
+					results <- "SSL Scanner:\n" + strings.Join(ssl, "\n")
+				}
+			}()
+
+			// Run Technology Detector
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				techs, err := techDetector(domain)
+				if err != nil {
+					results <- "Technology Detector error: " + err.Error()
+				} else if len(techs) == 0 {
+					results <- "No technologies detected."
+				} else {
+					results <- "Technology Detector:\n" + FormatTechResults(techs)
+				}
+			}()
+
+			// Run Web Vulnerability Scanner
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				vulns, err := webVulnScanner(domain)
+				if err != nil {
+					results <- "Web Vulnerability Scanner error: " + err.Error()
+				} else {
+					results <- "Web Vulnerability Scanner:\n" + strings.Join(vulns, "\n")
+				}
+			}()
+
+			// Run Nmap
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				nmapResults, err := RunNmapScans(domain, false) // change 'false' to 'true' if you want sudo mode
+				if err != nil {
+					results <- "Nmap error: " + err.Error()
+				} else {
+					results <- "Nmap Results:\n" + nmapResults
+				}
+			}()
+
 			// Wait for all
 			go func() {
 				wg.Wait()
 				close(results)
 			}()
 
-			// Collect results as they finish (non-blocking UI updates)
+			// Collect results as they finish
 			var final strings.Builder
 			for r := range results {
 				final.WriteString(r + "\n\n")
