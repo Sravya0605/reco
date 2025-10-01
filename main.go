@@ -2,6 +2,7 @@ package main
 
 import (
 	"strings"
+	"sync"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -64,25 +65,80 @@ func main() {
 			op.Show()
 			return
 		}
+
 		op.SetText("Scanning, please wait...")
 		op.Show()
 
 		go func() {
-			lines, err := whoIs(domain)
-			var txt string
-			if err != nil {
-				txt = "Error:" + err.Error()
-			} else {
-				txt = strings.Join(lines, "\n")
+			var wg sync.WaitGroup
+			results := make(chan string, 4)
+
+			// Run Whois
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				lines, err := whoIs(domain)
+				if err != nil {
+					results <- "WHOIS error: " + err.Error()
+				} else {
+					results <- "WHOIS results:\n" + strings.Join(lines, "\n")
+				}
+			}()
+
+			// Run DNS
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				subs, err := Dns(domain)
+				if err != nil {
+					results <- "DNS error: " + err.Error()
+				} else if len(subs) == 0 {
+					results <- "No subdomains found."
+				} else {
+					results <- "DNS enumeration:\n" + strings.Join(subs, "\n")
+				}
+			}()
+
+			// Run Dir
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				arr := dir(domain)
+				if len(arr) == 0 {
+					results <- "No directories found."
+				} else {
+					results <- "Directory scan:\n" + strings.Join(arr, "\n")
+				}
+			}()
+
+			// Run Vhost
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				hosts, err := vhost(domain)
+				if err != nil {
+					results <- "VHOST error: " + err.Error()
+				} else if len(hosts) == 0 {
+					results <- "No virtual hosts found."
+				} else {
+					results <- "VHOST results:\n" + strings.Join(hosts, "\n")
+				}
+			}()
+
+			// Wait for all
+			go func() {
+				wg.Wait()
+				close(results)
+			}()
+
+			// Collect results as they finish (non-blocking UI updates)
+			var final strings.Builder
+			for r := range results {
+				final.WriteString(r + "\n\n")
 			}
 
-			arr := dir(domain)
-			dirtext := strings.Join(arr, "\n")
-
-			txt += "\n\nDirectory scan results: \n" + dirtext
-
 			fyne.CurrentApp().Driver().DoFromGoroutine(func() {
-				op.SetText(txt)
+				op.SetText(final.String())
 				op.Show()
 			}, true)
 		}()

@@ -3,53 +3,57 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"log"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/miekg/dns"
 )
 
-func Dns(domain string) {
+func Dns(domain string) ([]string, error) {
 	file, err := os.Open("TextFiles/subdomains-top1million-5000.txt")
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	defer file.Close()
 
-	client := &dns.Client{
-		Timeout: 2 * time.Second,
-	}
-
+	client := &dns.Client{Timeout: 2 * time.Second}
 	var subs []string
+	var mu sync.Mutex
+	sem := make(chan struct{}, 200)
+	var wg sync.WaitGroup
+
 	scanner := bufio.NewScanner(file)
-
 	for scanner.Scan() {
-		subdomain := strings.TrimSpace(scanner.Text())
-		if subdomain == "" {
+		sub := strings.TrimSpace(scanner.Text())
+		if sub == "" {
 			continue
 		}
 
-		query := fmt.Sprintf("%s.%s.", subdomain, domain)
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(sub string) {
+			defer wg.Done()
+			defer func() { <-sem }()
 
-		msg := new(dns.Msg)
-		msg.SetQuestion(query, dns.TypeA)
+			query := fmt.Sprintf("%s.%s.", sub, domain)
+			msg := new(dns.Msg)
+			msg.SetQuestion(query, dns.TypeA)
 
-		res, _, err := client.Exchange(msg, "8.8.8.8:53")
-		if err != nil {
-			continue
-		}
-
-		if res.Rcode == dns.RcodeSuccess && len(res.Answer) > 0 {
-			fmt.Printf("[+] %s.%s\n", subdomain, domain)
-			subs = append(subs, fmt.Sprintf("%s.%s", subdomain, domain))
-		}
+			res, _, err := client.Exchange(msg, "8.8.8.8:53")
+			if err == nil && res.Rcode == dns.RcodeSuccess && len(res.Answer) > 0 {
+				mu.Lock()
+				subs = append(subs, query[:len(query)-1]) // remove trailing dot
+				mu.Unlock()
+			}
+		}(sub)
 	}
 
+	wg.Wait()
 	if err := scanner.Err(); err != nil {
-		log.Fatalf("Error reading file: %v", err)
+		return nil, err
 	}
 
-	fmt.Printf("\nFound %d valid subdomains\n", len(subs))
+	return subs, nil
 }

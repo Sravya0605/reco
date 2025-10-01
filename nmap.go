@@ -29,13 +29,14 @@ const (
 
 // -------------------- Public API --------------------
 
-// RunNmapScans runs a set of nmap commands against target with optional sudo.
-// It runs scans concurrently (bounded by MAX_CONC), saves outputs to a temp dir,
-// and prints a concise, beginner-friendly summary when finished.
-func RunNmapScans(target string, useSudo bool) {
-	fmt.Printf("RunNmapScans: target=%q, useSudo=%v\n", target, useSudo)
+// RunNmapScans runs a set of nmap commands concurrently against a target,
+// saves outputs temporarily, and returns a beginner-friendly aggregated summary.
+func RunNmapScans(target string, useSudo bool) (string, error) {
+	var outputBuilder strings.Builder
+
+	outputBuilder.WriteString(fmt.Sprintf("RunNmapScans: target=%q, useSudo=%v\n", target, useSudo))
 	if useSudo && os.Geteuid() == 0 {
-		fmt.Println("Already root — sudo prefix not required. Running without sudo prefix.")
+		outputBuilder.WriteString("Already root — sudo prefix not required. Running without sudo prefix.\n")
 		useSudo = false
 	}
 
@@ -46,43 +47,37 @@ func RunNmapScans(target string, useSudo bool) {
 		pass, err := term.ReadPassword(int(syscall.Stdin))
 		fmt.Println()
 		if err != nil {
-			fmt.Printf("failed to read password: %v\n", err)
-			return
+			return "", fmt.Errorf("failed to read password: %w", err)
 		}
 		sudoPass = pass
 	}
 
 	// Ensure nmap exists
 	if _, err := exec.LookPath("nmap"); err != nil {
-		fmt.Println("nmap not found in PATH. Install nmap first.")
-		return
+		return "", fmt.Errorf("nmap not found in PATH")
 	}
 
 	// create a single temp dir for outputs
 	outDir, err := os.MkdirTemp("", "gonmap-output-*")
 	if err != nil {
-		fmt.Printf("failed to create temp dir: %v\n", err)
-		return
+		return "", fmt.Errorf("failed to create temp dir: %w", err)
 	}
-	fmt.Printf("Saving outputs to: %s\n\n", outDir)
+	outputBuilder.WriteString(fmt.Sprintf("Saving outputs to: %s\n\n", outDir))
 
-	// define the scans (concise, useful)
 	commands := [][]string{
-		{"nmap", "-sS", "-T4", target},                                                // SYN top1000
-		{"nmap", "-p-", "-sS", "-sV", "-O", "-T4", target},                            // full TCP + service + OS
-		{"nmap", "-sU", "-p", "53,67,68,69,123,161,500,514,1900,3306,5432", target},   // UDP common
-		{"nmap", "--top-ports", "200", "--script=default,safe", "-sV", "-T4", target}, // top ports + safe NSE
-		{"nmap", "-A", "-T4", target},                                                 // aggressive (noisy)
-		{"nmap", "-sT", "-T4", target},                                                // connect scan fallback
-		{"nmap", "-sS", "-sV", "--version-intensity", "5", target},                    // extra version probe
-		{"nmap", "-sn", target},                                                       // ping sweep (CIDR recommended)
+		{"nmap", "-sS", "-T4", target},
+		{"nmap", "-p-", "-sS", "-sV", "-O", "-T4", target},
+		{"nmap", "-sU", "-p", "53,67,68,69,123,161,500,514,1900,3306,5432", target},
+		{"nmap", "--top-ports", "200", "--script=default,safe", "-sV", "-T4", target},
+		{"nmap", "-A", "-T4", target},
+		{"nmap", "-sT", "-T4", target},
+		{"nmap", "-sS", "-sV", "--version-intensity", "5", target},
+		{"nmap", "-sn", target},
 	}
 
-	// concurrency: pick aggressive default but allow override
 	maxWorkers := pickMaxWorkers()
-	fmt.Printf("Running up to %d scans concurrently (override with MAX_CONC env).\n\n", maxWorkers)
+	outputBuilder.WriteString(fmt.Sprintf("Running up to %d scans concurrently (override with MAX_CONC env).\n\n", maxWorkers))
 
-	// create worker semaphore
 	sem := make(chan struct{}, maxWorkers)
 	var wg sync.WaitGroup
 
@@ -93,28 +88,23 @@ func RunNmapScans(target string, useSudo bool) {
 		Err     error
 		File    string
 	}
-
 	results := make([]jobResult, len(commands))
-	// run jobs
+
 	for i, cmdVec := range commands {
-		// capture loop vars
 		i := i
 		cmdVec := cmdVec
 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sem <- struct{}{}        // acquire
-			defer func() { <-sem }() // release
+			sem <- struct{}{}
+			defer func() { <-sem }()
 
-			// build name and file path
 			name := fmt.Sprintf("scan_%02d_%s", i+1, slugify(strings.Join(cmdVec, "_")))
 			filename := filepath.Join(outDir, name+".txt")
 
-			// run with timeout
 			out, err := runWithTimeoutAndSudo(defaultTimeout, cmdVec[0], cmdVec[1:], useSudo, sudoPass)
 
-			// save output (best-effort)
 			_ = os.WriteFile(filename, []byte(out), 0644)
 
 			results[i] = jobResult{
@@ -124,46 +114,42 @@ func RunNmapScans(target string, useSudo bool) {
 				Err:     err,
 				File:    filename,
 			}
-			// small progress feedback for user
-			if err != nil {
-				fmt.Printf("[job %d] finished (error) — saved: %s\n", i+1, filename)
-			} else {
-				fmt.Printf("[job %d] finished — saved: %s\n", i+1, filename)
-			}
 		}()
 	}
-
-	// wait for all jobs
 	wg.Wait()
 
-	// print beginner-friendly summary in the original command order
-	fmt.Println("\n\n===== Beginner-friendly summary =====")
+	outputBuilder.WriteString("\n\n===== Beginner-friendly summary =====\n")
 	for i := range results {
 		r := results[i]
-		fmt.Printf("\n--- Scan #%d ---\n", i+1)
-		fmt.Printf("Command: %s\n", r.CmdLine)
-		fmt.Printf("Saved output: %s\n", r.File)
+		outputBuilder.WriteString(fmt.Sprintf("\n--- Scan #%d ---\n", i+1))
+		outputBuilder.WriteString(fmt.Sprintf("Command: %s\n", r.CmdLine))
+		outputBuilder.WriteString(fmt.Sprintf("Saved output: %s\n", r.File))
 		if r.Err != nil {
-			fmt.Printf("Note: command returned error: %v\n", r.Err)
+			outputBuilder.WriteString(fmt.Sprintf("Note: command returned error: %v\n", r.Err))
 		}
 		opens := extractOpenPorts(r.Output)
 		if len(opens) > 0 {
-			fmt.Printf("Open ports found (%d): %s\n", len(opens), strings.Join(opens, ", "))
+			outputBuilder.WriteString(fmt.Sprintf("Open ports found (%d): %s\n", len(opens), strings.Join(opens, ", ")))
 		} else {
-			fmt.Println("Open ports found: none (or host filtered/quiet).")
+			outputBuilder.WriteString("Open ports found: none (or host filtered/quiet).\n")
 		}
-		// preview first 12 lines
 		lines := strings.Split(r.Output, "\n")
-		fmt.Println("Preview (first 12 lines):")
-		for k := 0; k < len(lines) && k < 12; k++ {
-			fmt.Println(lines[k])
+		outputBuilder.WriteString("Preview (first 12 lines):\n")
+		limit := 12
+		if len(lines) < 12 {
+			limit = len(lines)
+		}
+		for k := 0; k < limit; k++ {
+			outputBuilder.WriteString(lines[k] + "\n")
 		}
 		if len(lines) > 12 {
-			fmt.Printf("... (output truncated) full output in %s\n", r.File)
+			outputBuilder.WriteString(fmt.Sprintf("... (output truncated) full output in %s\n", r.File))
 		}
 	}
-	fmt.Printf("\nAll outputs are in: %s\n", outDir)
-	fmt.Println("Tip: Run the binary itself with sudo (e.g., sudo ./gonmap) for better security.")
+	outputBuilder.WriteString(fmt.Sprintf("\nAll outputs are in: %s\n", outDir))
+	outputBuilder.WriteString("Tip: Run the binary itself with sudo (e.g., sudo ./gonmap) for better security.\n")
+
+	return outputBuilder.String(), nil
 }
 
 // -------------------- helpers --------------------
@@ -187,7 +173,7 @@ func pickMaxWorkers() int {
 }
 
 // runWithTimeoutAndSudo runs prog with args under a context timeout.
-// If useSudo is true it prefixes `sudo -S prog args...` and writes sudoPass to stdin.
+// If useSudo is true, prefixes with sudo and writes sudoPass to stdin.
 func runWithTimeoutAndSudo(timeout time.Duration, prog string, args []string, useSudo bool, sudoPass []byte) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -215,14 +201,14 @@ var openLineRe = regexp.MustCompile(`(?m)^(\d+)/(tcp|udp)\s+open\s+([^\s]+)`)
 // extractOpenPorts finds lines like "22/tcp open ssh" and returns short strings like "22/tcp(ssh)".
 func extractOpenPorts(output string) []string {
 	matches := openLineRe.FindAllStringSubmatch(output, -1)
-	out := []string{}
+	var out []string
 	for _, m := range matches {
 		out = append(out, fmt.Sprintf("%s/%s(%s)", m[1], m[2], m[3]))
 	}
 	return out
 }
 
-// slugify makes a short safe filename tag
+// slugify makes a safe filename tag from input string.
 func slugify(s string) string {
 	s = strings.ToLower(s)
 	s = strings.ReplaceAll(s, " ", "_")
@@ -238,3 +224,28 @@ func slugify(s string) string {
 	}
 	return s
 }
+
+// ----------- Minimal main example for integration -----------
+
+/*
+func main() {
+    domain := "example.com" // Or get from user input
+
+    go func() {
+        result, err := RunNmapScans(domain, false)
+        displayText := ""
+        if err != nil {
+            displayText = "Error: " + err.Error()
+        } else {
+            displayText = result
+        }
+
+        fyne.CurrentApp().Driver().DoFromGoroutine(func() {
+            op.SetText(displayText)
+            op.Show()
+        }, true)
+    }()
+
+    // setup and run your fyne app here...
+}
+*/
