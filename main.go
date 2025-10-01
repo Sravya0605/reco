@@ -7,43 +7,41 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
 
 func main() {
-	//findUser("faseeha0720")
-	//dir("vnrvjiet.ac.in")
-	//Dns("vnrvjiet.ac.in")
-	//vhost("vnrvjiet.ac.in")
-	//whoIs("vnrvjiet.ac.in")
-	//nmap()
-	a := app.New()
-	w := a.NewWindow("Reco")
-	w.Resize(fyne.NewSize(500, 600))
+	a := app.NewWithID("reco.app")
+	w := a.NewWindow("Reco – Reconnaissance Tool")
+	w.Resize(fyne.NewSize(700, 700))
 
+	// Output box
 	op := widget.NewMultiLineEntry()
-	op.SetMinRowsVisible(20)          // set minimum visible rows to increase height (default is smaller)
-	op.Resize(fyne.NewSize(480, 500)) // explicitly set size (width x height) in pixels
-	op.Wrapping = fyne.TextWrapWord   // better text wrapping for readability
+	op.SetMinRowsVisible(25)
+	op.Resize(fyne.NewSize(680, 500))
+	op.Wrapping = fyne.TextWrapWord
 	op.Hide()
 
+	// Input fields
 	ip1 := widget.NewEntry()
-	ip1.SetPlaceHolder("Enter user name")
+	ip1.SetPlaceHolder("Enter username (e.g. johndoe)")
 	ip1.Hide()
 
 	ip2 := widget.NewEntry()
-	ip2.SetPlaceHolder("Enter domain name: vnrvjiet.ac.in or example.com")
+	ip2.SetPlaceHolder("Enter domain (e.g. vnrvjiet.ac.in or example.com)")
 	ip2.Hide()
 
-	// Find User button functionality
-	go1 := widget.NewButton("Go", func() {
+	// Buttons
+	go1 := widget.NewButtonWithIcon("Run", theme.ConfirmIcon(), func() {
 		user := ip1.Text
 		if user == "" {
-			op.SetText("⚠ Please enter a username")
+			op.SetText("Please enter a username")
 			op.Show()
 			return
 		}
-		op.SetText("Searching...")
+		op.SetText("Searching for user info...")
 		op.Show()
 
 		go func() {
@@ -57,21 +55,20 @@ func main() {
 	})
 	go1.Hide()
 
-	// Website details button functionality
-	go2 := widget.NewButton("Go", func() {
+	go2 := widget.NewButtonWithIcon("Run Scan", theme.ConfirmIcon(), func() {
 		domain := ip2.Text
 		if domain == "" {
-			op.SetText("⚠ Please enter a domain name")
+			op.SetText("Please enter a domain name")
 			op.Show()
 			return
 		}
 
-		op.SetText("Scanning, please wait...")
+		op.SetText("Running scans, please wait...")
 		op.Show()
 
 		go func() {
 			var wg sync.WaitGroup
-			results := make(chan string, 10) // increase buffer for more tools
+			results := make(chan string, 11) // buffer for all tools
 
 			// Run Whois
 			wg.Add(1)
@@ -181,7 +178,7 @@ func main() {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				nmapResults, err := RunNmapScans(domain, false) // change 'false' to 'true' if you want sudo mode
+				nmapResults, err := RunNmapScans(domain, false)
 				if err != nil {
 					results <- "Nmap error: " + err.Error()
 				} else {
@@ -195,7 +192,7 @@ func main() {
 				close(results)
 			}()
 
-			// Collect results as they finish
+			// Collect results
 			var final strings.Builder
 			for r := range results {
 				final.WriteString(r + "\n\n")
@@ -209,8 +206,8 @@ func main() {
 	})
 	go2.Hide()
 
-	// Main buttons for choosing search type
-	btn1 := widget.NewButton("Find User", func() {
+	// Navigation buttons
+	btn1 := widget.NewButtonWithIcon("Find User", theme.AccountIcon(), func() {
 		ip1.Show()
 		go1.Show()
 		ip2.Hide()
@@ -218,7 +215,7 @@ func main() {
 		op.Hide()
 	})
 
-	btn2 := widget.NewButton("Website details", func() {
+	btn2 := widget.NewButtonWithIcon("Website Details", theme.ComputerIcon(), func() {
 		ip2.Show()
 		go2.Show()
 		ip1.Hide()
@@ -226,15 +223,20 @@ func main() {
 		op.Hide()
 	})
 
-	w.SetContent(container.NewVBox(
-		btn1,
-		btn2,
-		ip1,
-		ip2,
-		go1,
-		go2,
-		op,
-	))
+	// Layout
+	w.SetContent(
+		container.NewVBox(
+			widget.NewLabelWithStyle("Reco – Reconnaissance Tool", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+			widget.NewSeparator(),
+			container.New(layout.NewGridLayout(2), btn1, btn2),
+			ip1,
+			ip2,
+			go1,
+			go2,
+			widget.NewSeparator(),
+			container.NewScroll(op),
+		),
+	)
 
 	w.ShowAndRun()
 }
