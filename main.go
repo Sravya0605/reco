@@ -20,7 +20,7 @@ func main() {
 	// Output box
 	op := widget.NewMultiLineEntry()
 	op.SetMinRowsVisible(25)
-	op.Resize(fyne.NewSize(680, 500))
+	op.Resize(fyne.NewSize(680, 600))
 	op.Wrapping = fyne.TextWrapWord
 	op.Hide()
 
