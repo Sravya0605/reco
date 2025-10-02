@@ -11,7 +11,7 @@ It’s designed especially for beginners in ethical hacking, making reconnaissan
 - **DNS Enumeration**: Identify subdomains using large wordlists.
 - **Virtual Host Discovery**: Detect hidden virtual hosts via HTTP `Host` header manipulation.
 - **Directory Enumeration**: Find hidden directories/files via bruteforce wordlists.
-- **WHOIS Lookup**: Fetch domain registration and owner details.
+- **WHOIS Lookup**: Fetch domain registration and owner details. (to use this feature follow [this manual](TextFiles/Get_API.md))
 - **Network Scanning**: Run port/service scans via **Nmap** integration.
 
 ### Advanced Vulnerability Scanning
@@ -34,7 +34,7 @@ git clone https://github.com/yourusername/reco.git
 cd reco
 
 # Build the project
-go build -o reco main.go
+go build -o reco
 
 # Run the application
 ./reco    # Linux/macOS
