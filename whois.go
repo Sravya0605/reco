@@ -22,6 +22,7 @@ func whoIs(domain string) ([]string, error) {
 	req.Header.Set("Authorization", "TOKEN="+api)
 
 	client := &http.Client{}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to make request: %w", err)
@@ -42,7 +43,7 @@ func whoIs(domain string) ([]string, error) {
 		return nil, fmt.Errorf("failed to parse JSON: %w", err)
 	}
 
-	// Pretty print the JSON
+	// Filter out redacted entries recursively
 	filtered := filterWhois(result)
 
 	pretty, err := json.MarshalIndent(filtered, "", "  ")
@@ -56,6 +57,7 @@ func whoIs(domain string) ([]string, error) {
 
 func filterWhois(data map[string]interface{}) map[string]interface{} {
 	cleaned := make(map[string]interface{})
+
 	for key, value := range data {
 		switch v := value.(type) {
 		case string:
@@ -78,5 +80,6 @@ func filterWhois(data map[string]interface{}) map[string]interface{} {
 			cleaned[key] = value
 		}
 	}
+
 	return cleaned
 }

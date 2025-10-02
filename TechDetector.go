@@ -22,7 +22,6 @@ type TechResult struct {
 
 // techDetector performs technology stack detection
 func techDetector(domain string) ([]TechResult, error) {
-
 	var results []TechResult
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -53,7 +52,6 @@ func techDetector(domain string) ([]TechResult, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	bodyStr := string(body)
 	headers := resp.Header
 
@@ -107,7 +105,6 @@ func techDetector(domain string) ([]TechResult, error) {
 		},
 	}
 
-	// Check HTML content
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -115,13 +112,10 @@ func techDetector(domain string) ([]TechResult, error) {
 			for tech, pattern := range techs {
 				if matched, _ := regexp.MatchString("(?i)"+pattern, bodyStr); matched {
 					confidence := "Medium"
-
-					// Try to extract version
 					version := extractVersion(bodyStr, tech)
 					if version != "" {
 						confidence = "High"
 					}
-
 					mu.Lock()
 					results = append(results, TechResult{
 						Technology: tech,
@@ -136,7 +130,6 @@ func techDetector(domain string) ([]TechResult, error) {
 		}
 	}()
 
-	// Check HTTP headers
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -185,9 +178,9 @@ func techDetector(domain string) ([]TechResult, error) {
 				mu.Unlock()
 			}
 		}
+
 	}()
 
-	// Check endpoints
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -219,7 +212,7 @@ func extractVersion(content, tech string) string {
 	return ""
 }
 
-// parseServerHeader parses the Server header
+// parseServerHeader parses the Server header to identify web server
 func parseServerHeader(server string) string {
 	s := strings.ToLower(server)
 	switch {
@@ -233,14 +226,16 @@ func parseServerHeader(server string) string {
 		return "LiteSpeed"
 	case strings.Contains(s, "cloudflare"):
 		return "Cloudflare"
+	default:
+		return server
 	}
-	return server
 }
 
-// extractVersionFromServer extracts version number
+// extractVersionFromServer extracts version number from Server header
 func extractVersionFromServer(server string) string {
 	re := regexp.MustCompile(`([0-9]+\.[0-9]+(?:\.[0-9]+)?)`)
-	if matches := re.FindStringSubmatch(server); len(matches) > 1 {
+	matches := re.FindStringSubmatch(server)
+	if len(matches) > 1 {
 		return matches[1]
 	}
 	return ""
@@ -256,20 +251,22 @@ func parsePoweredByHeader(powered string) string {
 		return "ASP.NET"
 	case strings.Contains(s, "express"):
 		return "Node.js/Express"
+	default:
+		return powered
 	}
-	return powered
 }
 
-// extractVersionFromPoweredBy extracts version from X-Powered-By
+// extractVersionFromPoweredBy extracts version from X-Powered-By header
 func extractVersionFromPoweredBy(powered string) string {
 	re := regexp.MustCompile(`([0-9]+\.[0-9]+(?:\.[0-9]+)?)`)
-	if matches := re.FindStringSubmatch(powered); len(matches) > 1 {
+	matches := re.FindStringSubmatch(powered)
+	if len(matches) > 1 {
 		return matches[1]
 	}
 	return ""
 }
 
-// checkTechEndpoints checks endpoints
+// checkTechEndpoints checks specific technology-related endpoints
 func checkTechEndpoints(domain string, client *http.Client, results *[]TechResult, mu *sync.Mutex) {
 	endpoints := map[string]string{
 		"/wp-admin/":      "WordPress",
@@ -286,33 +283,36 @@ func checkTechEndpoints(domain string, client *http.Client, results *[]TechResul
 	}
 
 	for ep, tech := range endpoints {
-		url := fmt.Sprintf("https://%s%s", domain, ep)
-		req, err := http.NewRequest("GET", url, nil)
-		if err != nil {
-			continue
-		}
-		req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; TechDetector/1.0)")
+		func(endpoint, technology string) {
+			url := fmt.Sprintf("https://%s%s", domain, endpoint)
+			req, err := http.NewRequest("GET", url, nil)
+			if err != nil {
+				return
+			}
+			req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; TechDetector/1.0)")
 
-		resp, err := client.Do(req)
-		if err != nil {
-			continue
-		}
-		resp.Body.Close()
+			resp, err := client.Do(req)
+			if err != nil {
+				return
+			}
+			defer resp.Body.Close()
 
-		if resp.StatusCode == 200 || resp.StatusCode == 401 || resp.StatusCode == 403 {
-			mu.Lock()
-			*results = append(*results, TechResult{
-				Technology: tech,
-				Category:   "Endpoints",
-				Confidence: "Medium",
-				Evidence:   fmt.Sprintf("Endpoint %s returned %d", ep, resp.StatusCode),
-			})
-			mu.Unlock()
-		}
+			if resp.StatusCode == 200 || resp.StatusCode == 401 || resp.StatusCode == 403 {
+				mu.Lock()
+				*results = append(*results, TechResult{
+					Technology: technology,
+					Version:    "",
+					Category:   "Endpoints",
+					Confidence: "Medium",
+					Evidence:   fmt.Sprintf("Endpoint %s returned %d", endpoint, resp.StatusCode),
+				})
+				mu.Unlock()
+			}
+		}(ep, tech)
 	}
 }
 
-// removeDuplicateTech removes duplicates
+// removeDuplicateTech removes duplicate technology results
 func removeDuplicateTech(results []TechResult) []TechResult {
 	keys := make(map[string]bool)
 	var unique []TechResult
@@ -324,10 +324,11 @@ func removeDuplicateTech(results []TechResult) []TechResult {
 			unique = append(unique, r)
 		}
 	}
+
 	return unique
 }
 
-// FormatTechResults formats detection results
+// FormatTechResults formats technology detection results for display
 func FormatTechResults(results []TechResult) string {
 	if len(results) == 0 {
 		return "No technologies detected."
@@ -344,14 +345,15 @@ func FormatTechResults(results []TechResult) string {
 	for category, techs := range categoryGroups {
 		out.WriteString(fmt.Sprintf("=== %s ===\n", strings.ToUpper(category)))
 		for i, t := range techs {
-			v := ""
+			versionStr := ""
 			if t.Version != "" {
-				v = " v" + t.Version
+				versionStr = " v" + t.Version
 			}
-			out.WriteString(fmt.Sprintf("%d. %s%s [%s confidence]\n", i+1, t.Technology, v, t.Confidence))
+			out.WriteString(fmt.Sprintf("%d. %s%s [%s confidence]\n", i+1, t.Technology, versionStr, t.Confidence))
 			out.WriteString(fmt.Sprintf("   Evidence: %s\n", t.Evidence))
 		}
 		out.WriteString("\n")
 	}
+
 	return out.String()
 }

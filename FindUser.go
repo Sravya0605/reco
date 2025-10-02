@@ -32,10 +32,10 @@ var sites = map[string]map[string]string{
 
 func findUser(username string) []string {
 	client := &http.Client{
-		Timeout: 5 * time.Second,
+		Timeout: 10 * time.Second,
 	}
 
-	var arr []string
+	var results []string
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
@@ -49,6 +49,7 @@ func findUser(username string) []string {
 			if err != nil {
 				return
 			}
+
 			req.Header.Set("User-Agent", "Mozilla/5.0")
 
 			resp, err := client.Do(req)
@@ -57,19 +58,25 @@ func findUser(username string) []string {
 			}
 			defer resp.Body.Close()
 
-			body, _ := io.ReadAll(resp.Body)
-
-			if resp.StatusCode == 404 || strings.Contains(strings.ToLower(string(body)), strings.ToLower(data["error"])) {
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
 				return
 			}
 
+			if resp.StatusCode == 404 || strings.Contains(strings.ToLower(string(body)), strings.ToLower(data["error"])) {
+				// User not found
+				return
+			}
+
+			// If no error indications, assume user exists
 			formatted := fmt.Sprintf("[+] %s: %s", site, url)
+
 			mu.Lock()
-			arr = append(arr, formatted)
+			results = append(results, formatted)
 			mu.Unlock()
 		}(site, data)
 	}
 
 	wg.Wait()
-	return arr
+	return results
 }

@@ -30,13 +30,17 @@ func dir(domain string) []string {
 	}
 
 	client := &http.Client{
-		Timeout: 5 * time.Second,
+		Timeout: 10 * time.Second,
 	}
 
 	var results []string
 	var mu sync.Mutex
-	sem := make(chan struct{}, 20)
+	sem := make(chan struct{}, 20) // concurrency limit 20
 	var wg sync.WaitGroup
+
+	ignoreStatuses := map[int]bool{
+		301: true,
+	}
 
 	for _, line := range lines {
 		wg.Add(1)
@@ -52,13 +56,23 @@ func dir(domain string) []string {
 			}
 
 			url := fmt.Sprintf("https://%s/%s", domain, line)
-			req, err := http.NewRequest("GET", url, nil)
-			if err != nil {
-				return
-			}
-			req.Header.Set("User-Agent", "Mozilla/5.0")
+			var resp *http.Response
+			var err error
 
-			resp, err := client.Do(req)
+			// Retry logic - try up to 3 times with delay
+			for i := 0; i < 3; i++ {
+				req, err := http.NewRequest("GET", url, nil)
+				if err != nil {
+					return
+				}
+				req.Header.Set("User-Agent", "Mozilla/5.0")
+
+				resp, err = client.Do(req)
+				if err == nil {
+					break
+				}
+				time.Sleep(300 * time.Millisecond)
+			}
 			if err != nil {
 				return
 			}
@@ -69,18 +83,17 @@ func dir(domain string) []string {
 				return
 			}
 
-			ignore := map[int]bool{
-				301: true,
-			}
-
 			content := strings.ToLower(string(body))
-			if ignore[resp.StatusCode] || strings.Contains(content, "not found") {
+			if ignoreStatuses[resp.StatusCode] || strings.Contains(content, "not found") {
 				return
 			}
 
 			mu.Lock()
 			results = append(results, fmt.Sprintf("[%d] %s", resp.StatusCode, line))
 			mu.Unlock()
+
+			// Add a small delay between requests to avoid flooding
+			time.Sleep(50 * time.Millisecond)
 		}(line)
 	}
 
@@ -91,5 +104,21 @@ func dir(domain string) []string {
 		return results[i] < results[j]
 	})
 
+	// Remove duplicates
+	results = removeDuplicates(results)
+
 	return results
+}
+
+func removeDuplicates(elements []string) []string {
+	encountered := map[string]bool{}
+	result := []string{}
+
+	for _, e := range elements {
+		if !encountered[e] {
+			encountered[e] = true
+			result = append(result, e)
+		}
+	}
+	return result
 }

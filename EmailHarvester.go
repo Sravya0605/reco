@@ -11,113 +11,107 @@ import (
 	"time"
 )
 
-// EmailResult represents an email finding
+// EmailResult represents an email finding with source and type classification
 type EmailResult struct {
 	Email  string
 	Source string
-	Type   string
+	Type   string // e.g., "Direct", "Website", "Technical"
 }
 
-// EmailHarvester performs email harvesting from various sources
+// EmailHarvester scans for email addresses related to a domain from various sources
 func emailHarvester(domain string) ([]EmailResult, error) {
-	var results []EmailResult
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 	}
 
-	// Email regex pattern
-	emailRegex := regexp.MustCompile(`[a-zA-Z0-9._%+\-]+@` + regexp.QuoteMeta(domain))
+	emailRegex := regexp.MustCompile("[a-zA-Z0-9._%+-]+@" + regexp.QuoteMeta(domain))
 
-	// Check main website
+	var results []EmailResult
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	// Scan main page
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		emails := extractEmailsFromURL(fmt.Sprintf("https://%s", domain), client, emailRegex)
+		emails := extractEmailsFromURL("https://"+domain, client, emailRegex)
 		mu.Lock()
-		for _, email := range emails {
-			results = append(results, EmailResult{
-				Email:  email,
-				Source: "Main Website",
-				Type:   "Direct",
-			})
+		for _, e := range emails {
+			results = append(results, EmailResult{Email: e, Source: "Main Website", Type: "Direct"})
 		}
 		mu.Unlock()
 	}()
 
-	// Check common pages
+	// Scan common pages
 	commonPages := []string{
-		"contact", "about", "team", "staff", "directory",
-		"contact-us", "about-us", "support", "help",
+		"about", "contact", "contact-us", "support", "help", "team", "staff", "directory",
 	}
-
 	for _, page := range commonPages {
+		page := page
 		wg.Add(1)
-		go func(page string) {
+		go func() {
 			defer wg.Done()
-			pageURL := fmt.Sprintf("https://%s/%s", domain, page)
-			emails := extractEmailsFromURL(pageURL, client, emailRegex)
+			url := fmt.Sprintf("https://%s/%s", domain, page)
+			emails := extractEmailsFromURL(url, client, emailRegex)
 			mu.Lock()
-			for _, email := range emails {
-				results = append(results, EmailResult{
-					Email:  email,
-					Source: fmt.Sprintf("Page: %s", page),
-					Type:   "Website",
-				})
+			for _, e := range emails {
+				results = append(results, EmailResult{Email: e, Source: "Page " + page, Type: "Website"})
 			}
 			mu.Unlock()
-		}(page)
+		}()
 	}
 
-	// Check robots.txt and sitemap.xml
+	// Scan robots.txt and sitemap.xml files
+	robotsURL := "https://" + domain + "/robots.txt"
+	sitemapURL := "https://" + domain + "/sitemap.xml"
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		robotsEmails := extractEmailsFromURL(fmt.Sprintf("https://%s/robots.txt", domain), client, emailRegex)
-		sitemapEmails := extractEmailsFromURL(fmt.Sprintf("https://%s/sitemap.xml", domain), client, emailRegex)
-
+		emails := extractEmailsFromURL(robotsURL, client, emailRegex)
 		mu.Lock()
-		for _, email := range robotsEmails {
-			results = append(results, EmailResult{
-				Email:  email,
-				Source: "robots.txt",
-				Type:   "Technical",
-			})
+		for _, e := range emails {
+			results = append(results, EmailResult{Email: e, Source: "robots.txt", Type: "Technical"})
 		}
-		for _, email := range sitemapEmails {
-			results = append(results, EmailResult{
-				Email:  email,
-				Source: "sitemap.xml",
-				Type:   "Technical",
-			})
+		mu.Unlock()
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		emails := extractEmailsFromURL(sitemapURL, client, emailRegex)
+		mu.Lock()
+		for _, e := range emails {
+			results = append(results, EmailResult{Email: e, Source: "sitemap.xml", Type: "Technical"})
 		}
 		mu.Unlock()
 	}()
 
 	wg.Wait()
 
-	// Remove duplicates and sort
+	// Remove duplicates
 	results = removeDuplicateEmails(results)
+
+	// Sort by type and email for better readibility
 	sort.Slice(results, func(i, j int) bool {
-		return results[i].Email < results[j].Email
+		if results[i].Type == results[j].Type {
+			return results[i].Email < results[j].Email
+		}
+		return results[i].Type < results[j].Type
 	})
 
 	return results, nil
 }
 
-// extractEmailsFromURL extracts emails from a given URL
-func extractEmailsFromURL(targetURL string, client *http.Client, emailRegex *regexp.Regexp) []string {
-	req, err := http.NewRequest("GET", targetURL, nil)
+// extractEmailsFromURL fetches content from url and extracts emails matching regex
+func extractEmailsFromURL(url string, client *http.Client, regex *regexp.Regexp) []string {
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil
 	}
-
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; EmailHarvester/1.0)")
 
 	resp, err := client.Do(req)
-	if err != nil || resp.StatusCode != 200 {
+	if err != nil || resp.StatusCode != http.StatusOK {
 		return nil
 	}
 	defer resp.Body.Close()
@@ -126,47 +120,44 @@ func extractEmailsFromURL(targetURL string, client *http.Client, emailRegex *reg
 	if err != nil {
 		return nil
 	}
-
-	return emailRegex.FindAllString(string(body), -1)
+	emails := regex.FindAllString(string(body), -1)
+	return emails
 }
 
-// removeDuplicateEmails removes duplicate email results
-func removeDuplicateEmails(results []EmailResult) []EmailResult {
-	keys := make(map[string]bool)
+// removeDuplicateEmails removes duplicate email findings
+func removeDuplicateEmails(emails []EmailResult) []EmailResult {
+	seen := make(map[string]bool)
 	var unique []EmailResult
-
-	for _, result := range results {
-		if !keys[result.Email] {
-			keys[result.Email] = true
-			unique = append(unique, result)
+	for _, e := range emails {
+		if !seen[e.Email] {
+			seen[e.Email] = true
+			unique = append(unique, e)
 		}
 	}
-
 	return unique
 }
 
-// FormatEmailResults formats email results for display
+// FormatEmailResults formats the email findings for display or output
 func FormatEmailResults(results []EmailResult) string {
 	if len(results) == 0 {
-		return "No emails found for the domain."
+		return "No emails found."
 	}
 
-	var output strings.Builder
-	output.WriteString(fmt.Sprintf("Found %d email addresses:\n\n", len(results)))
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("Found %d email addresses:\n\n", len(results)))
 
-	// Group by type
-	typeGroups := make(map[string][]EmailResult)
-	for _, result := range results {
-		typeGroups[result.Type] = append(typeGroups[result.Type], result)
+	groups := map[string][]EmailResult{}
+	for _, e := range results {
+		groups[e.Type] = append(groups[e.Type], e)
 	}
 
-	for emailType, emails := range typeGroups {
-		output.WriteString(fmt.Sprintf("=== %s EMAILS ===\n", strings.ToUpper(emailType)))
-		for i, result := range emails {
-			output.WriteString(fmt.Sprintf("%d. %s (Source: %s)\n", i+1, result.Email, result.Source))
+	for t, group := range groups {
+		builder.WriteString(fmt.Sprintf("=== %s Emails ===\n", strings.Title(t)))
+		for i, e := range group {
+			builder.WriteString(fmt.Sprintf("%d. %s (Source: %s)\n", i+1, e.Email, e.Source))
 		}
-		output.WriteString("\n")
+		builder.WriteString("\n")
 	}
 
-	return output.String()
+	return builder.String()
 }

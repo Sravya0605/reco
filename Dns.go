@@ -18,10 +18,10 @@ func Dns(domain string) ([]string, error) {
 	}
 	defer file.Close()
 
-	client := &dns.Client{Timeout: 2 * time.Second}
+	client := &dns.Client{Timeout: 7 * time.Second}
 	var subs []string
 	var mu sync.Mutex
-	sem := make(chan struct{}, 200)
+	sem := make(chan struct{}, 100)
 	var wg sync.WaitGroup
 
 	scanner := bufio.NewScanner(file)
