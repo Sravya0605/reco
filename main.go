@@ -234,7 +234,6 @@ func main() {
 			go1,
 			go2,
 			widget.NewSeparator(),
-			container.NewScroll(op),
 		),
 	)
 
