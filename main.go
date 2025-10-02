@@ -30,7 +30,7 @@ func main() {
 	ip1.Hide()
 
 	ip2 := widget.NewEntry()
-	ip2.SetPlaceHolder("Enter domain (e.g. vnrvjiet.ac.in or example.com)")
+	ip2.SetPlaceHolder("Enter domain (e.g. example.com)")
 	ip2.Hide()
 
 	// Buttons
@@ -63,7 +63,7 @@ func main() {
 			return
 		}
 
-		op.SetText("Running scans, please wait...")
+		op.SetText("Running scans, please wait...\n Feel free to get a coffee, this will take a while")
 		op.Show()
 
 		go func() {
