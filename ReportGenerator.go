@@ -29,7 +29,6 @@ func CreateScanReport(domain string, outputs map[string]string) (string, string,
 	fp := filepath.Join(dir, filename)
 
 	var summaryLines []string
-	var detailsBuilder strings.Builder
 
 	summaryLines = append(summaryLines, fmt.Sprintf("- **Domain scanned:** `%s`", domain))
 	summaryLines = append(summaryLines, fmt.Sprintf("- **Report generated (UTC):** %s", t.Format(time.RFC3339)))
@@ -50,16 +49,6 @@ func CreateScanReport(domain string, outputs map[string]string) (string, string,
 			problemCount++
 			summaryLines = append(summaryLines, fmt.Sprintf("- [%s] **Issue detected** — check details.", tool))
 		}
-
-		if strings.Contains(lower, "host is up") || strings.Contains(lower, "open") || strings.Contains(lower, "200]") || strings.Contains(lower, "200 ") {
-			summaryLines = append(summaryLines, fmt.Sprintf("- [%s] Positive result: reachable/open services or HTTP 200 responses.", tool))
-		}
-
-		// Output full tool output, no truncation
-		detailsBuilder.WriteString("### " + tool + "\n\n")
-		detailsBuilder.WriteString("```\n")
-		detailsBuilder.WriteString(out)
-		detailsBuilder.WriteString("\n```\n\n")
 	}
 
 	var md strings.Builder
@@ -84,12 +73,8 @@ func CreateScanReport(domain string, outputs map[string]string) (string, string,
 	md.WriteString("- For DNS/whois failures, retry with alternative resolvers (8.8.8.8 / 1.1.1.1) and fallback whois providers.\n\n")
 	md.WriteString("---\n\n")
 
-	md.WriteString("## Tool outputs (full)\n\n")
-	md.WriteString(detailsBuilder.String())
-
-	md.WriteString("---\n\n")
 	md.WriteString("## Raw outputs (collapsible)\n\n")
-	// Keep raw outputs collapsible for GitHub/GitLab-friendly review
+	// Show only raw outputs collapsible for GitHub/GitLab-friendly review
 	for _, tool := range tools {
 		out := outputs[tool]
 		md.WriteString(fmt.Sprintf("<details>\n<summary>%s</summary>\n\n", tool))

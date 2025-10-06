@@ -61,21 +61,36 @@ func filterWhois(data map[string]interface{}) map[string]interface{} {
 	for key, value := range data {
 		switch v := value.(type) {
 		case string:
-			if v != "REDACTED FOR PRIVACY" {
-				cleaned[key] = v
+			// Skip strings that are redacted or contain RDDS query instructions
+			if v == "REDACTED FOR PRIVACY" || strings.Contains(v, "Please query the RDDS service of the Registrar of Record") {
+				continue
 			}
+			cleaned[key] = v
+		case nil:
+			// Skip null values
+			continue
 		case []interface{}:
 			var newArr []interface{}
 			for _, elem := range v {
 				if elemMap, ok := elem.(map[string]interface{}); ok {
-					newArr = append(newArr, filterWhois(elemMap))
-				} else {
+					filteredElem := filterWhois(elemMap)
+					// Only include non-empty maps
+					if len(filteredElem) > 0 {
+						newArr = append(newArr, filteredElem)
+					}
+				} else if elem != nil {
 					newArr = append(newArr, elem)
 				}
 			}
-			cleaned[key] = newArr
+			if len(newArr) > 0 {
+				cleaned[key] = newArr
+			}
 		case map[string]interface{}:
-			cleaned[key] = filterWhois(v)
+			filteredMap := filterWhois(v)
+			// Only include non-empty maps
+			if len(filteredMap) > 0 {
+				cleaned[key] = filteredMap
+			}
 		default:
 			cleaned[key] = value
 		}

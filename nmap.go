@@ -60,11 +60,11 @@ func RunNmapScans(target string, useSudo bool) (string, error) {
 
 	// Adding target to each command and tuning timings (-T4 aggressive for speed)
 	commands := [][]string{
-		{"-Pn", "-sS", "--top-ports", "1000", "-T4", target},                                        // fast top TCP ports
-		{"-Pn", "-sV", "--top-ports", "1000", "--script", "default,safe", "-T4", target},            // service/version + safe scripts
-		{"-Pn", "-p", "80,443", "--script", "http-enum,http-vuln*,ssl-enum-ciphers", "-T4", target}, // web focus
-		{"-Pn", "-sU", "-p", "53,67,69,123,161,500,514,1900,3306,5432", "-T4", target},              // UDP selective
-		{"-Pn", "-sS", "-p-", "--defeat-rst-ratelimit", "-T4", target},                              // full TCP ports faster than -T3
+		{"-Pn", "-sS", "--top-ports", "1000", "-T4", target},
+		{"-Pn", "-sV", "--top-ports", "1000", "--script", "default,safe", "-T4", target},
+		{"-Pn", "-p", "80,443", "--script", "http-enum,http-vuln*,ssl-enum-ciphers", "-T4", target},
+		{"-Pn", "-sU", "-p", "53,67,69,123,161,500,514,1900,3306,5432", "-T4", target},
+		{"-Pn", "-sS", "-p-", "--defeat-rst-ratelimit", "-T4", target},
 	}
 
 	maxWorkers := pickMaxWorkers()
@@ -96,6 +96,37 @@ func RunNmapScans(target string, useSudo bool) (string, error) {
 	}
 	wg.Wait()
 
+	// Helper function for cleaning the preview output
+	cleanPreview := func(output string) string {
+		lines := strings.Split(output, "\n")
+		var filtered []string
+		seen := make(map[string]bool)
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" {
+				continue
+			}
+			// Filter out noise
+			if strings.Contains(trimmed, "RTTVAR has grown") {
+				continue
+			}
+			if strings.Contains(trimmed, "*TEMPORARILY DISABLED*") {
+				continue
+			}
+			if seen[trimmed] {
+				continue
+			}
+			seen[trimmed] = true
+			filtered = append(filtered, trimmed)
+		}
+		limit := 8
+		if len(filtered) < limit {
+			limit = len(filtered)
+		}
+		return strings.ReplaceAll(strings.Join(filtered[:limit], " "), "|", "\\|")
+	}
+
+	// Building the output table with cleaned preview
 	outputBuilder.WriteString("\n## Nmap Scan Results\n")
 	outputBuilder.WriteString("| # | Command | Open Ports | Error | Preview |\n|---|---------|------------|-------|---------|\n")
 	for i, r := range results {
@@ -105,15 +136,8 @@ func RunNmapScans(target string, useSudo bool) (string, error) {
 			opStr = strings.Join(opens, ", ")
 		}
 
-		lines := strings.Split(r.Output, "\n")
-		limit := 8
-		if len(lines) < limit {
-			limit = len(lines)
-		}
-		preview := ""
-		if len(lines) > 0 {
-			preview = strings.ReplaceAll(strings.Join(lines[:limit], " "), "|", "\\|")
-		}
+		// Clean the preview text
+		preview := cleanPreview(r.Output)
 
 		errMsg := ""
 		if r.Err != nil {
