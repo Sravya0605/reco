@@ -175,9 +175,9 @@ func checkTLSVersionIssues(version uint16) []string {
 	case tls.VersionTLS11:
 		issues = append(issues, "🟡 TLS 1.1 is deprecated")
 	case tls.VersionTLS12:
-		issues = append(issues, "✅ TLS 1.2 is acceptable")
+		issues = append(issues, " TLS 1.2 is acceptable")
 	case tls.VersionTLS13:
-		issues = append(issues, "✅ TLS 1.3 is current standard")
+		issues = append(issues, " TLS 1.3 is current standard")
 	default:
 		issues = append(issues, "🟡 Unknown TLS version")
 	}

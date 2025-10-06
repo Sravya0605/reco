@@ -20,11 +20,8 @@ func main() {
 	// Output box
 	op := widget.NewMultiLineEntry()
 	op.SetMinRowsVisible(25)
-<<<<<<< HEAD
 	op.Resize(fyne.NewSize(680, 600))
-=======
 	op.Resize(fyne.NewSize(680, 500))
->>>>>>> 5a7964e (Made changes again)
 	op.Wrapping = fyne.TextWrapWord
 	op.Hide()
 
@@ -34,11 +31,8 @@ func main() {
 	ip1.Hide()
 
 	ip2 := widget.NewEntry()
-<<<<<<< HEAD
 	ip2.SetPlaceHolder("Enter domain (e.g. example.com)")
-=======
 	ip2.SetPlaceHolder("Enter domain (e.g. vnrvjiet.ac.in or example.com)")
->>>>>>> 5a7964e (Made changes again)
 	ip2.Hide()
 
 	// Buttons
@@ -72,23 +66,14 @@ func main() {
 			return
 		}
 
-<<<<<<< HEAD
 		op.SetText("Running scans, please wait...\n Feel free to get a coffee, this will take a while")
-=======
-		op.SetText("Running scans, please wait...")
->>>>>>> 5a7964e (Made changes again)
 		op.Show()
 
 		// Run all scans concurrently but collect structured outputs in a map
 		go func() {
 			var wg sync.WaitGroup
-<<<<<<< HEAD
-			results := make(chan string, 11) // buffer for all tools
-=======
 			outputs := make(map[string]string)
 			var mu sync.Mutex
->>>>>>> 5a7964e (Made changes again)
-
 			addResult := func(tool string, out string) {
 				mu.Lock()
 				outputs[tool] = out
@@ -246,20 +231,13 @@ func main() {
 					op.Show()
 				}, true)
 			}()
-<<<<<<< HEAD
-
 			// Collect results
 			var final strings.Builder
-			for r := range results {
-				final.WriteString(r + "\n\n")
-			}
 
 			fyne.CurrentApp().Driver().DoFromGoroutine(func() {
 				op.SetText(final.String())
 				op.Show()
 			}, true)
-=======
->>>>>>> 5a7964e (Made changes again)
 		}()
 	})
 	go2.Hide()

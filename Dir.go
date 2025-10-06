@@ -30,12 +30,12 @@ func dir(domain string) []string {
 	}
 
 	client := &http.Client{
-		Timeout: 10 * time.Second,
+		Timeout: 7 * time.Second,
 	}
 
 	var results []string
 	var mu sync.Mutex
-	sem := make(chan struct{}, 20) // concurrency limit 20
+	sem := make(chan struct{}, 200) // concurrency limit 20
 	var wg sync.WaitGroup
 
 	ignoreStatuses := map[int]bool{
@@ -71,9 +71,9 @@ func dir(domain string) []string {
 				if err == nil {
 					break
 				}
-				time.Sleep(300 * time.Millisecond)
+				time.Sleep(100 * time.Millisecond)
 			}
-			if err != nil {
+			if err != nil || resp == nil {
 				return
 			}
 			defer resp.Body.Close()

@@ -19,8 +19,7 @@ import (
 
 // Default timeout increased to 10 minutes per scan
 const (
-	defaultTimeout    = 10 * time.Minute
-	defaultMaxWorkers = 16
+	defaultTimeout = 15 * time.Minute
 )
 
 // Global variable to hold sudo password when needed
@@ -30,14 +29,15 @@ var sudoPass []byte = nil
 // Requests sudo access if not running as root and useSudo is true.
 // Does NOT save outputs to files - returns aggregated string output.
 func RunNmapScans(target string, useSudo bool) (string, error) {
-	var outputBuilder strings.Builder
+	if target == "" {
+		return "", fmt.Errorf("target must be specified")
+	}
 
-	outputBuilder.WriteString(fmt.Sprintf("RunNmapScans: target=%q\n", target))
+	var outputBuilder strings.Builder
 
 	isRoot := (os.Geteuid() == 0)
 
 	if !isRoot && useSudo {
-		// Prompt for sudo password interactively
 		fmt.Print("Sudo privileges are recommended for more accurate scans.\nEnter sudo password (will not echo): ")
 		pass, err := term.ReadPassword(int(syscall.Stdin))
 		fmt.Println()
@@ -48,31 +48,26 @@ func RunNmapScans(target string, useSudo bool) (string, error) {
 		outputBuilder.WriteString("Sudo password acquired, scans will be run with sudo prefix.\n")
 	} else if isRoot {
 		outputBuilder.WriteString("Running with root privileges, sudo prefix not used.\n")
-		useSudo = false // unnecessary when already root
+		useSudo = false
 	} else {
 		outputBuilder.WriteString("Running without root privileges and sudo disabled; scans may be limited.\n")
 		useSudo = false
 	}
 
-	// Ensure nmap executable is in PATH
 	if _, err := exec.LookPath("nmap"); err != nil {
 		return "", fmt.Errorf("nmap not found in PATH")
 	}
 
+	// Adding target to each command and tuning timings (-T4 aggressive for speed)
 	commands := [][]string{
-		{"nmap", "-sS", "-T3", target},
-		{"nmap", "-p-", "-sS", "-sV", "-O", "-T3", target},
-		{"nmap", "-sU", "-p", "53,67,68,69,123,161,500,514,1900,3306,5432", target},
-		{"nmap", "--top-ports", "200", "--script=default,safe", "-sV", "-T3", target},
-		{"nmap", "-A", "-T3", target},
-		{"nmap", "-sT", "-T3", target},
-		{"nmap", "-sS", "-sV", "--version-intensity", "5", target},
-		{"nmap", "-sn", target},
+		{"-Pn", "-sS", "--top-ports", "1000", "-T4", target},                                        // fast top TCP ports
+		{"-Pn", "-sV", "--top-ports", "1000", "--script", "default,safe", "-T4", target},            // service/version + safe scripts
+		{"-Pn", "-p", "80,443", "--script", "http-enum,http-vuln*,ssl-enum-ciphers", "-T4", target}, // web focus
+		{"-Pn", "-sU", "-p", "53,67,69,123,161,500,514,1900,3306,5432", "-T4", target},              // UDP selective
+		{"-Pn", "-sS", "-p-", "--defeat-rst-ratelimit", "-T4", target},                              // full TCP ports faster than -T3
 	}
 
 	maxWorkers := pickMaxWorkers()
-	outputBuilder.WriteString(fmt.Sprintf("Executing up to %d concurrent scans (configurable via MAX_CONC environment variable).\n\n", maxWorkers))
-
 	sem := make(chan struct{}, maxWorkers)
 	var wg sync.WaitGroup
 
@@ -84,74 +79,74 @@ func RunNmapScans(target string, useSudo bool) (string, error) {
 	}
 	results := make([]jobResult, len(commands))
 
-	for i, cmdVec := range commands {
-		i := i
-		cmdVec := cmdVec
-
+	for i, args := range commands {
 		wg.Add(1)
-		go func() {
+		go func(idx int, cargs []string) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-
-			out, err := runWithTimeoutAndSudo(defaultTimeout, cmdVec[0], cmdVec[1:], useSudo, sudoPass)
-
-			results[i] = jobResult{
-				Index:   i,
-				CmdLine: strings.Join(cmdVec, " "),
+			out, err := runWithTimeoutAndSudo(defaultTimeout, "nmap", cargs, useSudo, sudoPass)
+			results[idx] = jobResult{
+				Index:   idx,
+				CmdLine: "nmap " + strings.Join(cargs, " "),
 				Output:  out,
 				Err:     err,
 			}
-		}()
+		}(i, args)
 	}
 	wg.Wait()
 
-	outputBuilder.WriteString("\n===== Beginner-friendly summary =====\n")
-	for i := range results {
-		r := results[i]
-		outputBuilder.WriteString(fmt.Sprintf("\n--- Scan #%d ---\n", i+1))
-		outputBuilder.WriteString(fmt.Sprintf("Command: %s\n", r.CmdLine))
-		if r.Err != nil {
-			outputBuilder.WriteString(fmt.Sprintf("Note: command returned error: %v\n", r.Err))
-		}
+	outputBuilder.WriteString("\n## Nmap Scan Results\n")
+	outputBuilder.WriteString("| # | Command | Open Ports | Error | Preview |\n|---|---------|------------|-------|---------|\n")
+	for i, r := range results {
 		opens := extractOpenPorts(r.Output)
+		opStr := "none"
 		if len(opens) > 0 {
-			outputBuilder.WriteString(fmt.Sprintf("Open ports found (%d): %s\n", len(opens), strings.Join(opens, ", ")))
-		} else {
-			outputBuilder.WriteString("Open ports found: none (or host filtered/quiet).\n")
+			opStr = strings.Join(opens, ", ")
 		}
+
 		lines := strings.Split(r.Output, "\n")
-		outputBuilder.WriteString("Preview (first 12 lines):\n")
-		limit := 12
-		if len(lines) < 12 {
+		limit := 8
+		if len(lines) < limit {
 			limit = len(lines)
 		}
-		for k := 0; k < limit; k++ {
-			outputBuilder.WriteString(lines[k] + "\n")
+		preview := ""
+		if len(lines) > 0 {
+			preview = strings.ReplaceAll(strings.Join(lines[:limit], " "), "|", "\\|")
 		}
-		if len(lines) > 12 {
-			outputBuilder.WriteString("... (output truncated)\n")
+
+		errMsg := ""
+		if r.Err != nil {
+			errMsg = r.Err.Error()
 		}
+
+		outputBuilder.WriteString(fmt.Sprintf("| %d | `%s` | %s | %s | %s |\n",
+			i+1, r.CmdLine, opStr, errMsg, preview))
 	}
 
-	outputBuilder.WriteString("Tip: For best results, run the binary itself using sudo (e.g., sudo ./gonmap).\n")
+	outputBuilder.WriteString("\n<details><summary>Full Nmap Outputs</summary>\n\n")
+	for i, r := range results {
+		outputBuilder.WriteString(fmt.Sprintf("### Scan #%d: `%s`\n", i+1, r.CmdLine))
+		outputBuilder.WriteString("```\n")
+		outputBuilder.WriteString(r.Output)
+		outputBuilder.WriteString("\n```\n\n")
+	}
+	outputBuilder.WriteString("</details>\n")
+
+	outputBuilder.WriteString("Tip: For best results, run the binary itself using sudo (e.g., sudo ./your_scanner).\n")
 
 	return outputBuilder.String(), nil
 }
 
-// -------------------- helpers --------------------
-
 // pickMaxWorkers picks the concurrency level.
 // Default = min(defaultMaxWorkers, runtime.NumCPU()*4) unless overridden by MAX_CONC env var.
 func pickMaxWorkers() int {
+	// Allow higher default concurrency, up to all logical CPUs * 8
+	guess := runtime.NumCPU() * 8
 	if s := os.Getenv("MAX_CONC"); s != "" {
 		if v, err := strconv.Atoi(s); err == nil && v > 0 {
 			return v
 		}
-	}
-	guess := runtime.NumCPU() * 4
-	if guess > defaultMaxWorkers {
-		guess = defaultMaxWorkers
 	}
 	if guess < 1 {
 		guess = 1

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -24,23 +25,28 @@ type TechResult struct {
 func techDetector(domain string) ([]TechResult, error) {
 	var results []TechResult
 	var mu sync.Mutex
-	var wg sync.WaitGroup
+	// Limit concurrency for endpoint checks to avoid overload
+	const maxConcurrency = 10
+	sem := make(chan struct{}, maxConcurrency)
 
 	client := &http.Client{
-		Timeout: 15 * time.Second,
+		Timeout: 10 * time.Second, // Reduced timeout
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
+			ForceAttemptHTTP2: true, // Enable HTTP/2
 		},
 	}
 
 	targetURL := fmt.Sprintf("https://%s", domain)
 
-	// Get main page
-	req, err := http.NewRequest("GET", targetURL, nil)
+	// Context with timeout for main page request
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; TechDetector/1.0)")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -55,64 +61,42 @@ func techDetector(domain string) ([]TechResult, error) {
 	bodyStr := string(body)
 	headers := resp.Header
 
-	// Technology detection patterns
+	// Proceed with regex matching for main page technologies
 	techPatterns := map[string]map[string]string{
+		// Only key patterns retained for lean regex matching
 		"Content Management Systems": {
-			"WordPress":   "wp-content|wp-includes|wp-admin|wordpress",
-			"Drupal":      "drupal|sites/default|sites/all",
-			"Joomla":      "joomla|com_content|administrator",
-			"Magento":     "magento|mage/js|skin/frontend",
-			"PrestaShop":  "prestashop|ps_|prestashop_",
-			"Shopify":     "shopify|cdn.shopify.com",
-			"Squarespace": "squarespace|static1.squarespace.com",
-			"Wix":         "wix.com|static.wixstatic.com",
+			"WordPress": "wp-content|wp-includes|wp-admin",
+			"Drupal":    "drupal|sites/default",
+			"Joomla":    "joomla|com_content",
 		},
 		"JavaScript Frameworks": {
-			"React":       "react|_react|ReactDOM",
-			"Angular":     "angular|ng-|angularjs",
-			"Vue.js":      "vue.js|vue.min.js|__vue__",
-			"jQuery":      "jquery|jQuery",
-			"Bootstrap":   "bootstrap|btn-|col-md",
-			"Backbone.js": "backbone|Backbone",
-			"Ember.js":    "ember|Ember",
+			"React":   "react|ReactDOM",
+			"Angular": "angular|angularjs",
+			"Vue.js":  "vue.js|__vue__",
+			"jQuery":  "jquery",
 		},
 		"Web Servers": {
 			"Apache":     "apache",
 			"Nginx":      "nginx",
-			"IIS":        "iis|microsoft-iis",
+			"IIS":        "iis",
 			"LiteSpeed":  "litespeed",
 			"Cloudflare": "cloudflare",
 		},
 		"Programming Languages": {
 			"PHP":     "php|x-powered-by.*php",
-			"ASP.NET": "asp.net|aspnet|__viewstate",
-			"Java":    "jsessionid|java|jsp",
-			"Python":  "django|flask|python",
-			"Ruby":    "ruby|rails|x-powered-by.*ruby",
-			"Node.js": "node.js|express|x-powered-by.*express",
-		},
-		"Analytics & Marketing": {
-			"Google Analytics":   "google-analytics|gtag|ga\\.js",
-			"Facebook Pixel":     "facebook|fbevents|connect.facebook.net",
-			"Google Tag Manager": "googletagmanager|gtm.js",
-			"Hotjar":             "hotjar|hj\\.js",
-		},
-		"CDN & Hosting": {
-			"Cloudflare":   "cloudflare|cf-ray",
-			"AWS":          "amazonaws|cloudfront",
-			"Google Cloud": "googlecloud|gcp",
-			"Azure":        "azure|azurewebsites",
+			"ASP.NET": "asp.net|__viewstate",
+			"Node.js": "node.js|express",
+			"Python":  "django|flask",
 		},
 	}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	detectTechFromContent := func() {
 		for category, techs := range techPatterns {
 			for tech, pattern := range techs {
-				if matched, _ := regexp.MatchString("(?i)"+pattern, bodyStr); matched {
-					confidence := "Medium"
+				matched, _ := regexp.MatchString("(?i)"+pattern, bodyStr)
+				if matched {
 					version := extractVersion(bodyStr, tech)
+					confidence := "Medium"
 					if version != "" {
 						confidence = "High"
 					}
@@ -128,12 +112,11 @@ func techDetector(domain string) ([]TechResult, error) {
 				}
 			}
 		}
-	}()
+	}
+	detectTechFromContent()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
+	// Check headers for tech info
+	checkHeaderTech := func() {
 		if server := headers.Get("Server"); server != "" {
 			mu.Lock()
 			results = append(results, TechResult{
@@ -145,7 +128,6 @@ func techDetector(domain string) ([]TechResult, error) {
 			})
 			mu.Unlock()
 		}
-
 		if powered := headers.Get("X-Powered-By"); powered != "" {
 			mu.Lock()
 			results = append(results, TechResult{
@@ -157,36 +139,54 @@ func techDetector(domain string) ([]TechResult, error) {
 			})
 			mu.Unlock()
 		}
+	}
+	checkHeaderTech()
 
-		revealingHeaders := map[string]string{
-			"X-AspNet-Version":    "ASP.NET",
-			"X-AspNetMvc-Version": "ASP.NET MVC",
-			"X-Drupal-Cache":      "Drupal",
-			"X-Generator":         "Unknown CMS",
-		}
+	// Check specific endpoints concurrently with semaphore limiting
+	endpoints := map[string]string{
+		"/wp-admin/":      "WordPress",
+		"/administrator/": "Joomla",
+		"/phpmyadmin/":    "phpMyAdmin",
+		"/webmail/":       "Webmail",
+		"/.well-known/":   "Well-known URIs",
+	}
 
-		for header, tech := range revealingHeaders {
-			if value := headers.Get(header); value != "" {
+	var wg sync.WaitGroup
+	for ep, tech := range endpoints {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(endpoint, technology string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			url := fmt.Sprintf("https://%s%s", domain, endpoint)
+			// Use HEAD request for speed
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			req, err := http.NewRequestWithContext(ctx, "HEAD", url, nil)
+			if err != nil {
+				return
+			}
+			req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; TechDetector/1.0)")
+
+			resp, err := client.Do(req)
+			if err != nil {
+				return
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode == 200 || resp.StatusCode == 401 || resp.StatusCode == 403 {
 				mu.Lock()
 				results = append(results, TechResult{
-					Technology: tech,
-					Version:    value,
-					Category:   "Framework",
-					Confidence: "High",
-					Evidence:   fmt.Sprintf("%s: %s", header, value),
+					Technology: technology,
+					Version:    "",
+					Category:   "Endpoints",
+					Confidence: "Medium",
+					Evidence:   fmt.Sprintf("Endpoint %s returned %d", endpoint, resp.StatusCode),
 				})
 				mu.Unlock()
 			}
-		}
-
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		checkTechEndpoints(domain, client, &results, &mu)
-	}()
-
+		}(ep, tech)
+	}
 	wg.Wait()
 
 	return removeDuplicateTech(results), nil
